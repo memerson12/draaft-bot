@@ -29,6 +29,16 @@ def initialize_database(db_name: str):
     conn = get_db_connection(db_name)
     cursor = conn.cursor()
 
+    # Minecraft Usernames Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS minecraft_usernames (
+            discord_id INTEGER NOT NULL,
+            minecraft_username TEXT NOT NULL,
+            updated_at_utc INTEGER NOT NULL,
+            PRIMARY KEY (discord_id)
+        )
+    ''')
+
     # Drafts Table: Core information about each draft
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS drafts (
@@ -360,5 +370,50 @@ def get_recent_picks(db_name: str, draft_id: str, limit: int = 10) -> list:
                 'created_at': row['pick_timestamp']
             })
         return picks
+    finally:
+        conn.close()
+
+
+def get_minecraft_username(db_name: str, discord_id: int) -> Optional[str]:
+    """Get a user's Minecraft username."""
+    conn = get_db_connection(db_name)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT minecraft_username FROM minecraft_usernames WHERE discord_id = ?",
+            (discord_id,)
+        )
+        row = cursor.fetchone()
+        return row['minecraft_username'] if row else None
+    finally:
+        conn.close()
+
+
+def set_minecraft_username(db_name: str, discord_id: int, minecraft_username: Optional[str]) -> bool:
+    """Set, update, or remove a user's Minecraft username."""
+    conn = get_db_connection(db_name)
+    cursor = conn.cursor()
+    try:
+        if minecraft_username is None:
+            # Remove the username
+            cursor.execute(
+                "DELETE FROM minecraft_usernames WHERE discord_id = ?",
+                (discord_id,)
+            )
+        else:
+            # Set or update the username
+            current_utc_timestamp = int(datetime.now(timezone.utc).timestamp())
+            cursor.execute('''
+                INSERT INTO minecraft_usernames (discord_id, minecraft_username, updated_at_utc)
+                VALUES (?, ?, ?)
+                ON CONFLICT(discord_id) DO UPDATE SET
+                    minecraft_username = excluded.minecraft_username,
+                    updated_at_utc = excluded.updated_at_utc
+            ''', (discord_id, minecraft_username, current_utc_timestamp))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Database error setting Minecraft username: {e}")
+        return False
     finally:
         conn.close()

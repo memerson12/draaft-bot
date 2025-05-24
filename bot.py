@@ -309,6 +309,54 @@ class DraftPickView(discord.ui.View):
         self.stop()
 
 
+class MinecraftUsernameModal(discord.ui.Modal, title="Enter Minecraft Username"):
+    def __init__(self, current_player_id: int, draft_id: str):
+        super().__init__()
+        self.current_player_id = current_player_id
+        self.draft_id = draft_id
+        self.username_input = discord.ui.TextInput(
+            label="Minecraft Username",
+            placeholder="Enter your Minecraft username",
+            min_length=3,
+            max_length=16,
+            required=True
+        )
+        self.add_item(self.username_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player_id:
+            await interaction.response.send_message("This is not your turn!", ephemeral=True)
+            return
+
+        # Store the username
+        if database.set_minecraft_username(DATABASE_NAME, self.current_player_id, self.username_input.value):
+            await interaction.response.send_message(f"✅ Your Minecraft username has been set to: **{self.username_input.value}**", ephemeral=True)
+
+            # Create and show the draft pick view
+            draft_pick_view = DraftPickView(
+                current_player_id=self.current_player_id, draft_id=self.draft_id)
+            await interaction.message.edit(view=draft_pick_view)
+        else:
+            await interaction.response.send_message("❌ Failed to save your Minecraft username. Please try again.", ephemeral=True)
+
+
+class MinecraftUsernameView(discord.ui.View):
+    def __init__(self, current_player_id: int, draft_id: str):
+        super().__init__(timeout=VIEW_TIMEOUT_SECONDS)
+        self.current_player_id = current_player_id
+        self.draft_id = draft_id
+
+    @discord.ui.button(label="Enter Minecraft Username", style=discord.ButtonStyle.primary)
+    async def enter_username(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.current_player_id:
+            await interaction.response.send_message("This is not your turn!", ephemeral=True)
+            return
+
+        modal = MinecraftUsernameModal(
+            current_player_id=self.current_player_id, draft_id=self.draft_id)
+        await interaction.response.send_modal(modal)
+
+
 async def update_draft_message(draft_id: str, final_update: bool = False):
     """Update the draft board message."""
     current_draft_state = database.get_draft_state(DATABASE_NAME, draft_id)
@@ -410,8 +458,15 @@ async def update_draft_message(draft_id: str, final_update: bool = False):
                 current_player_id = p_id
                 break
         if current_player_id:
-            view_to_send = DraftPickView(
-                current_player_id=current_player_id, draft_id=draft_id)
+            # Check if player has set their Minecraft username
+            minecraft_username = database.get_minecraft_username(
+                DATABASE_NAME, current_player_id)
+            if minecraft_username is None:
+                view_to_send = MinecraftUsernameView(
+                    current_player_id=current_player_id, draft_id=draft_id)
+            else:
+                view_to_send = DraftPickView(
+                    current_player_id=current_player_id, draft_id=draft_id)
 
     # Update or send message
     channel = bot.get_channel(channel_id)
@@ -781,6 +836,68 @@ async def recentdrafts_slash(interaction: discord.Interaction):
         )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="link", description="Link or update your Minecraft username.")
+@app_commands.describe(minecraft_username="Your Minecraft username (3-16 characters)")
+async def link_username(interaction: discord.Interaction, minecraft_username: str):
+    """Link or update a user's Minecraft username."""
+    # Validate username length
+    if not (3 <= len(minecraft_username) <= 16):
+        await interaction.response.send_message(
+            "❌ Minecraft usernames must be between 3 and 16 characters long.",
+            ephemeral=True
+        )
+        return
+
+    # Get current username if it exists
+    current_username = database.get_minecraft_username(
+        DATABASE_NAME, interaction.user.id)
+
+    # Update the username
+    if database.set_minecraft_username(DATABASE_NAME, interaction.user.id, minecraft_username):
+        if current_username:
+            await interaction.response.send_message(
+                f"✅ Your Minecraft username has been updated from **{current_username}** to **{minecraft_username}**",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ Your Minecraft username has been set to: **{minecraft_username}**",
+                ephemeral=True
+            )
+    else:
+        await interaction.response.send_message(
+            "❌ Failed to save your Minecraft username. Please try again.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="unlink", description="Remove your linked Minecraft username.")
+async def unlink_username(interaction: discord.Interaction):
+    """Remove a user's Minecraft username."""
+    # Get current username if it exists
+    current_username = database.get_minecraft_username(
+        DATABASE_NAME, interaction.user.id)
+
+    if not current_username:
+        await interaction.response.send_message(
+            "❌ You don't have a Minecraft username linked.",
+            ephemeral=True
+        )
+        return
+
+    # Remove the username
+    if database.set_minecraft_username(DATABASE_NAME, interaction.user.id, None):
+        await interaction.response.send_message(
+            f"✅ Your Minecraft username **{current_username}** has been unlinked.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "❌ Failed to unlink your Minecraft username. Please try again.",
+            ephemeral=True
+        )
 
 # --- Run the Bot ---
 if __name__ == "__main__":
