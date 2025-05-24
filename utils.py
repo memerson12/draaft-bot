@@ -6,8 +6,7 @@ from datetime import datetime
 def create_draft_embed(title: str, description: str, color: discord.Color = discord.Color.blue()) -> discord.Embed:
     """Create a standardized embed for draft-related messages."""
     embed = discord.Embed(title=title, description=description, color=color)
-    embed.set_thumbnail(
-        url="https://cdn.icon-icons.com/icons2/2072/PNG/512/minecraft_logo_icon_128449.png")
+    # embed.set_thumbnail()
     return embed
 
 

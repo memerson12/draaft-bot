@@ -335,3 +335,30 @@ def update_message_link(db_name: str, draft_id: str, message_link: Optional[str]
         return False
     finally:
         conn.close()
+
+
+def get_recent_picks(db_name: str, draft_id: str, limit: int = 10) -> list:
+    """Get the most recent picks for a draft."""
+    conn = get_db_connection(db_name)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT user_id, category_name, item_name, pick_timestamp
+            FROM player_picked_items
+            WHERE draft_id = ?
+            ORDER BY pick_timestamp DESC
+            LIMIT ?
+        """, (draft_id, limit))
+
+        picks = []
+        for row in cursor.fetchall():
+            picks.append({
+                'player_id': row['user_id'],
+                'category_name': row['category_name'],
+                'item_name': row['item_name'],
+                'created_at': row['pick_timestamp']
+            })
+        return picks
+    finally:
+        conn.close()

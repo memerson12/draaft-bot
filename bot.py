@@ -194,21 +194,67 @@ class DraftPickView(discord.ui.View):
             )
             return False
 
-        for child in self.children:
-            child.disabled = True
-        if not interaction.response.is_done():
-            await interaction.response.edit_message(view=self)
-        else:
+        # Update the pick history embed
+        current_draft_state = database.get_draft_state(
+            DATABASE_NAME, self.draft_id)
+        if current_draft_state and current_draft_state.get('board_message_id'):
             try:
-                await interaction.edit_original_response(view=self)
-            except discord.HTTPException as e:
-                print(
-                    f"Error editing original response in select_callback: {e}")
+                channel = interaction.channel
+                message = await channel.fetch_message(current_draft_state['board_message_id'])
 
-        await interaction.followup.send(
-            f"✅ {interaction.user.display_name} picked **{item_name}** from {category_name} (Draft ID: {self.draft_id})!",
-            ephemeral=False
-        )
+                # Create pick history embed
+                pick_history_embed = discord.Embed(
+                    title="📜 Pick History",
+                    color=discord.Color.green()
+                )
+
+                # Get all picks from the database
+                recent_picks = database.get_recent_picks(
+                    DATABASE_NAME, self.draft_id, limit=100)  # Increased limit to get all picks
+
+                if recent_picks:
+                    # Group picks by player
+                    picks_by_player = {}
+                    for pick in recent_picks:
+                        player_name = next(
+                            (name for id, name in current_draft_state['players'] if id == pick['player_id']), "Unknown")
+                        if player_name not in picks_by_player:
+                            picks_by_player[player_name] = []
+                        picks_by_player[player_name].append(
+                            f"**{pick['item_name']}** from {pick['category_name']}")
+
+                    # Create fields for each player's picks in draft order
+                    players_with_picks = [
+                        (id, name) for id, name in current_draft_state['players'] if name in picks_by_player]
+                    for i, (player_id, player_name) in enumerate(players_with_picks):
+                        pick_history_embed.add_field(
+                            name=f"🎯 {player_name}'s Picks",
+                            value="\n".join(picks_by_player[player_name]),
+                            inline=False
+                        )
+                        # Add a blank field for spacing, but not after the last player
+                        if i < len(players_with_picks) - 1:
+                            pick_history_embed.add_field(
+                                name="\u200b",  # Zero-width space
+                                value="\u200b",
+                                inline=False
+                            )
+                else:
+                    pick_history_embed.description = "No picks made yet."
+
+                # Disable the view after successful pick
+                for child in self.children:
+                    child.disabled = True
+
+                # Update the message with both embeds and the disabled view
+                if not interaction.response.is_done():
+                    await interaction.response.edit_message(embeds=[message.embeds[0], pick_history_embed], view=self)
+                else:
+                    await message.edit(embeds=[message.embeds[0], pick_history_embed], view=self)
+
+            except Exception as e:
+                print(f"Error updating pick history embed: {e}")
+
         return True
 
     async def _handle_post_pick(self, interaction, current_draft_state):
@@ -313,6 +359,46 @@ async def update_draft_message(draft_id: str, final_update: bool = False):
     embed.set_footer(
         text=f"Draft ID: {draft_id} | Global Draft with Per-Category Limits")
 
+    # Create pick history embed
+    pick_history_embed = discord.Embed(
+        title="📜 Pick History",
+        color=discord.Color.green()
+    )
+
+    # Get all picks from the database
+    recent_picks = database.get_recent_picks(
+        DATABASE_NAME, draft_id, limit=100)  # Increased limit to get all picks
+
+    if recent_picks:
+        # Group picks by player
+        picks_by_player = {}
+        for pick in recent_picks:
+            player_name = next(
+                (name for id, name in current_draft_state['players'] if id == pick['player_id']), "Unknown")
+            if player_name not in picks_by_player:
+                picks_by_player[player_name] = []
+            picks_by_player[player_name].append(
+                f"**{pick['item_name']}** from {pick['category_name']}")
+
+        # Create fields for each player's picks in draft order
+        players_with_picks = [
+            (id, name) for id, name in current_draft_state['players'] if name in picks_by_player]
+        for i, (player_id, player_name) in enumerate(players_with_picks):
+            pick_history_embed.add_field(
+                name=f"🎯 {player_name}'s Picks",
+                value="\n".join(picks_by_player[player_name]),
+                inline=False
+            )
+            # Add a blank field for spacing, but not after the last player
+            if i < len(players_with_picks) - 1:
+                pick_history_embed.add_field(
+                    name="\u200b",  # Zero-width space
+                    value="\u200b",
+                    inline=False
+                )
+    else:
+        pick_history_embed.description = "No picks made yet."
+
     # Create view for current player if active
     view_to_send = None
     if current_draft_state['status'] == 'active' and not final_update:
@@ -336,12 +422,12 @@ async def update_draft_message(draft_id: str, final_update: bool = False):
     try:
         if target_message_id:
             message = await channel.fetch_message(target_message_id)
-            await message.edit(content=message_content_override, embed=embed, view=view_to_send)
+            await message.edit(content=message_content_override, embeds=[embed, pick_history_embed], view=view_to_send)
         else:
-            msg = await channel.send(content=message_content_override, embed=embed, view=view_to_send)
+            msg = await channel.send(content=message_content_override, embeds=[embed, pick_history_embed], view=view_to_send)
             database.update_board_message_id(DATABASE_NAME, draft_id, msg.id)
     except discord.NotFound:
-        msg = await channel.send(content=message_content_override, embed=embed, view=view_to_send)
+        msg = await channel.send(content=message_content_override, embeds=[embed, pick_history_embed], view=view_to_send)
         database.update_board_message_id(DATABASE_NAME, draft_id, msg.id)
     except discord.Forbidden:
         print(f"Error: Bot lacks permissions in channel {channel.id}")
@@ -414,7 +500,8 @@ async def start_draft_slash(interaction: discord.Interaction,
     start_message = (
         f"🎉 New Draft Started by {interaction.user.mention} with players: {player_names_str}!\n"
         f"**Rules:** {picks_allowed_per_cat} pick(s) per category per player. Total {total_picks_allotted_player} picks per player.\n"
-        f"Total picks in draft: {total_picks_overall}."
+        f"Total picks in draft: {total_picks_overall}.\n\n"
+        f"**Recent Picks:**\n"
     )
 
     await interaction.response.send_message(start_message, ephemeral=False)
@@ -558,7 +645,7 @@ async def _draft_status_logic(interaction: discord.Interaction, draft_id: str, e
         return
 
     embed = utils.create_draft_embed(
-        title=f"� Full Draft Status (Draft ID: {draft_id})",
+        title=f" Full Draft Status (Draft ID: {draft_id})",
         color=discord.Color.gold()
     )
 
