@@ -5,15 +5,11 @@ import uuid
 from typing import List, Tuple, Dict, Optional, Any
 import copy  # For deepcopying INITIAL_ITEMS_BY_CATEGORY
 from datetime import datetime, timezone
+from items import pools
 
 # --- Constants ---
 INITIAL_ITEMS_BY_CATEGORY = {
-    "Biomes": ["Mesa", "Jungle", "Snowy", "Mega Taiga", "Mushroom"],
-    "Armour": ["Helmet", "Chestplate", "Leggings", "Boots", "Bucket"],
-    "Tools": ["Sword", "Pickaxe", "Shovel", "Hoe", "Axe", "Trident"],
-    "Multi-Part Advancements": ["Catalogue", "Adventuring", "Two by Two", "Monsters", "Balanced Diet"],
-    "Misc": ["Leads", "Fire Res", "Breeds", "Hives", "Crossbow", "Shulker"],
-    "Early Game": ["Fireworks", "Shulker Box", "Obsidian", "Logs", "Eyes", "Rod Rates"]
+    pool[1]: [item.pretty_name for item in pool[2]] for pool in pools
 }
 CATEGORIES_ORDER = list(INITIAL_ITEMS_BY_CATEGORY.keys())
 
@@ -56,7 +52,8 @@ def initialize_database(db_name: str):
             board_message_id INTEGER,
             last_event_message TEXT,
             created_at_utc INTEGER NOT NULL, -- Store as UTC timestamp
-            message_link TEXT -- Store the link to the original draft message
+            message_link TEXT, -- Store the link to the original draft message
+            seed TEXT -- Store the random seed for the draft
         )
     ''')
 
@@ -112,7 +109,8 @@ def create_draft(db_name: str, guild_id: int, channel_id: int, admin_user_id: in
                  total_picks_allotted_per_player: int,
                  draft_order_player_indices: List[int],
                  total_picks_to_make: int,
-                 message_link: Optional[str] = None) -> Optional[str]:
+                 message_link: Optional[str] = None,
+                 seed: Optional[str] = None) -> Optional[str]:
     draft_id = uuid.uuid4().hex[:10]  # Shorter unique ID
     conn = get_db_connection(db_name)
     cursor = conn.cursor()
@@ -124,13 +122,13 @@ def create_draft(db_name: str, guild_id: int, channel_id: int, admin_user_id: in
             INSERT INTO drafts (draft_id, guild_id, channel_id, admin_user_id, num_players,
                                 picks_allowed_per_player_per_category, total_picks_allotted_per_player,
                                 draft_order_player_indices_json, total_picks_to_make, created_at_utc,
-                                message_link)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                message_link, seed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (draft_id, guild_id, channel_id, admin_user_id, len(players_info),
               picks_allowed_per_player_per_category, total_picks_allotted_per_player,
               json.dumps(
                   draft_order_player_indices), total_picks_to_make, current_utc_timestamp,
-              message_link))
+              message_link, seed))
 
         for i, (user_id, display_name) in enumerate(players_info):
             cursor.execute('''

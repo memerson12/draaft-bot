@@ -1,6 +1,51 @@
 import discord
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import aiohttp
+import random
+import asyncio
+from functools import lru_cache
+from items import all_items
+
+# Cache for storing the seed list
+_seed_list_cache = None
+_last_fetch_time = None
+_CACHE_DURATION = 3600  # Cache duration in seconds (1 hour)
+
+
+async def fetch_seed_list() -> List[str]:
+    """Fetch the seed list from the website and cache it."""
+    global _seed_list_cache, _last_fetch_time
+
+    current_time = datetime.now().timestamp()
+
+    # Return cached list if it's still valid
+    if _seed_list_cache is not None and _last_fetch_time is not None:
+        if current_time - _last_fetch_time < _CACHE_DURATION:
+            return _seed_list_cache
+
+    # Fetch new list if cache is invalid
+    async with aiohttp.ClientSession() as session:
+        async with session.get('https://disrespec.tech/assets/seedlist.txt') as response:
+            if response.status == 200:
+                text = await response.text()
+                _seed_list_cache = [seed.strip()
+                                    for seed in text.split() if seed.strip()]
+                _last_fetch_time = current_time
+                return _seed_list_cache
+            else:
+                raise Exception(
+                    f"Failed to fetch seed list: HTTP {response.status}")
+
+
+async def get_random_seed() -> Optional[str]:
+    """Get a random seed from the seed list."""
+    try:
+        seed_list = await fetch_seed_list()
+        return random.choice(seed_list)
+    except Exception as e:
+        print(f"Error getting random seed: {e}")
+        return None
 
 
 def create_draft_embed(title: str, description: str, color: discord.Color = discord.Color.blue()) -> discord.Embed:
@@ -58,13 +103,24 @@ def format_category_field(category_name: str, master_list: List[str], available_
     available_count = len(available_items)
     display_items = []
 
-    for item in master_list:
-        if item in available_items:
-            display_items.append(item)
+    for item_name in master_list:
+        # Get the DraftItem object for this item
+        draft_item = next(
+            (item for item in all_items if item.pretty_name == item_name), None)
+        if draft_item:
+            if item_name in available_items:
+                display_items.append(
+                    f"**{item_name}** - {draft_item.description}")
+            else:
+                display_items.append(
+                    f"~~**{item_name}** - {draft_item.description}~~")
         else:
-            display_items.append(f"~~{item}~~")
+            if item_name in available_items:
+                display_items.append(item_name)
+            else:
+                display_items.append(f"~~{item_name}~~")
 
-    value = ", ".join(display_items) if display_items else "No items defined."
+    value = "\n".join(display_items) if display_items else "No items defined."
     if len(value) > 1020:
         value = value[:1020] + "..."
 
@@ -109,8 +165,19 @@ def get_player_draft_summary(draft_state: Dict[str, Any], player_id: int) -> tup
     for category_name in draft_state['categories_order']:
         items_in_category = player_draft.get(category_name, [])
         if items_in_category:
+            # Get descriptions for each item
+            item_descriptions = []
+            for item_name in items_in_category:
+                draft_item = next(
+                    (item for item in all_items if item.pretty_name == item_name), None)
+                if draft_item:
+                    item_descriptions.append(
+                        f"**{item_name}** - {draft_item.description}")
+                else:
+                    item_descriptions.append(item_name)
+
             category_lines.append(
-                f"**{category_name}**: {', '.join(items_in_category)} ({len(items_in_category)})")
+                f"**{category_name}**:\n" + "\n".join(item_descriptions) + f"\n({len(items_in_category)} items)")
             total_items += len(items_in_category)
 
     return total_items, category_lines

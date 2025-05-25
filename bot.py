@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 import database
 import utils
+from items import get_draft_item, DraftItem, all_items
 
 # Load environment variables
 load_dotenv()
@@ -86,10 +87,19 @@ class DraftPickView(discord.ui.View):
 
             if items_in_category_master and can_pick_from_this_cat and select_count < 5:
                 options = []
-                for item_master in items_in_category_master:
-                    if item_master in draft_state['available_items'].get(category_name, []):
-                        options.append(discord.SelectOption(
-                            label=item_master, value=f"{category_name}|{item_master}"))
+                for item_name in items_in_category_master:
+                    if item_name in draft_state['available_items'].get(category_name, []):
+                        # Get the DraftItem object for this item
+                        draft_item = next(
+                            (item for item in all_items if item.pretty_name == item_name), None)
+                        if draft_item:
+                            description = draft_item.description[:100] if len(
+                                draft_item.description) > 100 else draft_item.description
+                            options.append(discord.SelectOption(
+                                label=item_name,
+                                value=f"{category_name}|{item_name}",
+                                description=description
+                            ))
 
                 if not options:
                     continue
@@ -309,9 +319,14 @@ class DraftPickView(discord.ui.View):
         self.stop()
 
 
-class MinecraftUsernameModal(discord.ui.Modal, title="Enter Minecraft Username"):
+class MinecraftUsernameModal(discord.ui.Modal):
     def __init__(self, current_player_id: int, draft_id: str):
-        super().__init__()
+        # Get the player's name from the draft state
+        current_draft_state = database.get_draft_state(DATABASE_NAME, draft_id)
+        player_name = next(
+            (name for id, name in current_draft_state['players'] if id == current_player_id), "Player")
+
+        super().__init__(title=f"Enter Minecraft Username for {player_name}")
         self.current_player_id = current_player_id
         self.draft_id = draft_id
         self.username_input = discord.ui.TextInput(
@@ -346,8 +361,20 @@ class MinecraftUsernameView(discord.ui.View):
         self.current_player_id = current_player_id
         self.draft_id = draft_id
 
-    @discord.ui.button(label="Enter Minecraft Username", style=discord.ButtonStyle.primary)
-    async def enter_username(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Get the player's name from the draft state
+        current_draft_state = database.get_draft_state(DATABASE_NAME, draft_id)
+        player_name = next(
+            (name for id, name in current_draft_state['players'] if id == current_player_id), "Player")
+
+        # Create button with player's name
+        self.enter_username_button = discord.ui.Button(
+            label=f"{player_name}, Enter Minecraft Username",
+            style=discord.ButtonStyle.primary
+        )
+        self.enter_username_button.callback = self.enter_username
+        self.add_item(self.enter_username_button)
+
+    async def enter_username(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player_id:
             await interaction.response.send_message("This is not your turn!", ephemeral=True)
             return
@@ -550,14 +577,21 @@ async def start_draft_slash(interaction: discord.Interaction,
         num_actual_players, total_picks_allotted_player)
     total_picks_overall = len(draft_order_indices)
 
+    # Get a random seed for the draft
+    seed = await utils.get_random_seed()
+
     # Send initial message and get its link
     player_names_str = ", ".join([name for _, name in players_info_for_db])
     start_message = (
         f"🎉 New Draft Started by {interaction.user.mention} with players: {player_names_str}!\n"
         f"**Rules:** {picks_allowed_per_cat} pick(s) per category per player. Total {total_picks_allotted_player} picks per player.\n"
-        f"Total picks in draft: {total_picks_overall}.\n\n"
-        f"**Recent Picks:**\n"
+        f"Total picks in draft: {total_picks_overall}.\n"
     )
+
+    if seed:
+        start_message += f"**Seed:** `{seed}`\n\n"
+
+    start_message += "**Recent Picks:**\n"
 
     await interaction.response.send_message(start_message, ephemeral=False)
     message = await interaction.original_response()
@@ -566,7 +600,7 @@ async def start_draft_slash(interaction: discord.Interaction,
     draft_id = database.create_draft(
         DATABASE_NAME, interaction.guild_id, interaction.channel_id, interaction.user.id,
         players_info_for_db, picks_allowed_per_cat, total_picks_allotted_player,
-        draft_order_indices, total_picks_overall, message_link
+        draft_order_indices, total_picks_overall, message_link, seed
     )
 
     if not draft_id:
